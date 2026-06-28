@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import PageHeader from '../components/ui/PageHeader';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -14,10 +14,15 @@ import {
   Info,
   Calendar,
   Sparkles,
-  MapPin
+  MapPin,
+  MessageSquare,
+  X,
+  Send,
+  Trash2
 } from 'lucide-react';
 import { getLiveIncidents, updateIncidentStatus, getFirestoreCachedIntelligence, setFirestoreCachedIntelligence } from '../services/firebase/firestoreService';
 import { generateCityIntelligence, generateDatasetFingerprint, getInMemoryCachedIntelligence, cacheIntelligenceInMemory } from '../services/gemini/cityIntelligenceService';
+import { askCopilot } from '../services/gemini/copilotService';
 
 const SkeletonMetrics = () => (
   <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
@@ -92,6 +97,89 @@ const getShortWorkload = (workloadText) => {
   return fallback.charAt(0).toUpperCase() + fallback.slice(1);
 };
 
+const CopilotMessageContent = ({ text }) => {
+  if (!text) return null;
+
+  const lines = text.split('\n');
+  const elements = [];
+  let currentList = [];
+  let listType = null; // 'ul' | 'ol'
+
+  const flushList = (key) => {
+    if (currentList.length > 0) {
+      if (listType === 'ul') {
+        elements.push(
+          <ul key={key} className="list-disc pl-4 mb-2 flex flex-col gap-1 text-secondary-text">
+            {currentList}
+          </ul>
+        );
+      } else if (listType === 'ol') {
+        elements.push(
+          <ol key={key} className="list-decimal pl-4 mb-2 flex flex-col gap-1 text-secondary-text">
+            {currentList}
+          </ol>
+        );
+      }
+      currentList = [];
+      listType = null;
+    }
+  };
+
+  const parseInlineBold = (str) => {
+    const parts = str.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, idx) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={idx} className="font-extrabold text-primary-text">{part.slice(2, -2)}</strong>;
+      }
+      return part;
+    });
+  };
+
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
+      if (listType !== 'ul') {
+        flushList(`list-before-${idx}`);
+        listType = 'ul';
+      }
+      currentList.push(
+        <li key={`li-${idx}`} className="leading-relaxed">
+          {parseInlineBold(trimmed.slice(2))}
+        </li>
+      );
+    }
+    else if (/^\d+\.\s/.test(trimmed)) {
+      if (listType !== 'ol') {
+        flushList(`list-before-${idx}`);
+        listType = 'ol';
+      }
+      const markerLength = trimmed.match(/^\d+\.\s/)[0].length;
+      currentList.push(
+        <li key={`li-${idx}`} className="leading-relaxed">
+          {parseInlineBold(trimmed.slice(markerLength))}
+        </li>
+      );
+    }
+    else {
+      flushList(`list-before-plain-${idx}`);
+      if (trimmed === '') {
+        elements.push(<div key={`space-${idx}`} className="h-1.5" />);
+      } else {
+        elements.push(
+          <p key={`p-${idx}`} className="leading-relaxed mb-2 text-secondary-text">
+            {parseInlineBold(trimmed)}
+          </p>
+        );
+      }
+    }
+  });
+
+  flushList(`list-final`);
+
+  return <div className="text-[11px] leading-relaxed flex flex-col">{elements}</div>;
+};
+
 export default function Operations() {
   const [incidents, setIncidents] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -105,6 +193,56 @@ export default function Operations() {
   const [isIntelError, setIsIntelError] = useState(false);
   const [intelMetadata, setIntelMetadata] = useState(null);
   const [timeTick, setTimeTick] = useState(0);
+
+  // AI Operations Copilot states
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
+  const [copilotMessages, setCopilotMessages] = useState([]);
+  const [copilotInput, setCopilotInput] = useState('');
+  const [isCopilotLoading, setIsCopilotLoading] = useState(false);
+  const [copilotError, setCopilotError] = useState(null);
+  
+  const messagesEndRef = useRef(null);
+
+  // Auto-scroll on new messages
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [copilotMessages, isCopilotLoading]);
+
+  const handleSendCopilotMessage = async (messageText) => {
+    const trimmedText = (messageText || copilotInput).trim();
+    if (!trimmedText || isCopilotLoading) return;
+
+    setCopilotInput('');
+    setCopilotError(null);
+
+    // Push User message
+    const userMsg = { id: `user-${Date.now()}`, role: 'user', text: trimmedText };
+    setCopilotMessages(prev => [...prev, userMsg]);
+    setIsCopilotLoading(true);
+
+    try {
+      // Build conversation payload omitting system/error messages
+      const history = copilotMessages.filter(m => m.role === 'user' || m.role === 'model');
+      
+      const responseText = await askCopilot(
+        selectedCity,
+        filteredIncidents,
+        intelData,
+        history,
+        trimmedText
+      );
+
+      const copilotMsg = { id: `copilot-${Date.now()}`, role: 'model', text: responseText };
+      setCopilotMessages(prev => [...prev, copilotMsg]);
+    } catch (err) {
+      console.error('AI Copilot request failed:', err);
+      setCopilotError('AI Copilot is temporarily unavailable.');
+    } finally {
+      setIsCopilotLoading(false);
+    }
+  };
 
   // Auto-refresh cache relative age indicators every 15 seconds
   useEffect(() => {
@@ -923,8 +1061,186 @@ export default function Operations() {
               </div>
             </div>
           </Card>
+      </div>
+    </div>
+
+      {/* AI Operations Copilot Panel */}
+      {/* Floating Circular Launcher Badge */}
+      <button
+        onClick={() => setIsCopilotOpen(true)}
+        className="fixed bottom-6 right-6 p-4 bg-gradient-to-tr from-primary-accent to-[#14B8A6] text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 group active:scale-95 z-40 flex items-center gap-2 border border-white/10"
+        title="Open AI Operations Copilot"
+      >
+        <MessageSquare className="w-5.5 h-5.5 animate-pulse" />
+        <span className="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-500 ease-out text-xs font-bold uppercase tracking-wider select-none leading-none">
+          AI Copilot
+        </span>
+      </button>
+
+      {/* Slide-over Drawer Backdrop */}
+      {isCopilotOpen && (
+        <div 
+          onClick={() => setIsCopilotOpen(false)}
+          className="fixed inset-0 bg-black/45 backdrop-blur-xs transition-opacity duration-300 z-40"
+        />
+      )}
+
+      {/* sliding panel drawer container */}
+      <div 
+        className={`fixed top-0 right-0 h-full w-[380px] max-w-[100vw] bg-surface border-l border-borders shadow-2xl z-50 flex flex-col transform transition-transform duration-300 ease-in-out ${
+          isCopilotOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        {/* Drawer Header */}
+        <div className="px-5 py-4 border-b border-borders flex items-center justify-between bg-secondary-surface/40 select-none">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-primary-accent text-white">
+              <MessageSquare className="w-4 h-4" />
+            </div>
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-extrabold text-primary-text uppercase tracking-wider leading-none">AI Operations Copilot</span>
+              <span className="text-[9px] text-muted-text mt-1 leading-none font-medium">Scope: {selectedCity}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {copilotMessages.length > 0 && (
+              <button 
+                onClick={() => setCopilotMessages([])}
+                className="p-1.5 rounded-lg text-muted-text hover:text-danger hover:bg-secondary-surface transition-colors cursor-pointer"
+                title="Reset conversation"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button 
+              onClick={() => setIsCopilotOpen(false)}
+              className="p-1.5 rounded-lg text-muted-text hover:text-primary-text hover:bg-secondary-surface transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
+        {/* Scrollable Conversation History pane */}
+        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+          {copilotMessages.length === 0 ? (
+            <div className="py-6 flex flex-col gap-4">
+              {/* Copilot Welcome instructions card */}
+              <div className="p-5 bg-primary-accent/5 border border-primary-accent/15 rounded-2xl text-center flex flex-col gap-2.5 shadow-xs">
+                <div className="w-10 h-10 rounded-full bg-primary-accent/10 flex items-center justify-center mx-auto text-primary-accent">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <h4 className="font-extrabold text-primary-text text-xs uppercase tracking-wider">AI Operations Advisor</h4>
+                <p className="text-[11px] text-secondary-text leading-relaxed">
+                  Welcome to the Operations Copilot. Ask me analytical queries about the active database inside <strong>{selectedCity}</strong>. I can calculate loads, summarize reports, isolate safety concerns, or organize priorities.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {copilotMessages.map((msg) => {
+                const isUser = msg.role === 'user';
+                return (
+                  <div 
+                    key={msg.id}
+                    className={`flex flex-col max-w-[85%] ${
+                      isUser ? 'ml-auto text-right items-end' : 'mr-auto text-left items-start'
+                    }`}
+                  >
+                    <span className="text-[8px] font-bold text-muted-text uppercase tracking-wider mb-1 select-none">
+                      {isUser ? 'Public Official' : 'Copilot'}
+                    </span>
+                    <div 
+                      className={`px-4 py-3 rounded-2xl text-xs select-text shadow-xs ${
+                        isUser 
+                          ? 'bg-primary-accent text-white rounded-tr-none' 
+                          : 'bg-secondary-surface/50 border border-borders/60 text-secondary-text rounded-tl-none'
+                      }`}
+                    >
+                      {isUser ? (
+                        <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                      ) : (
+                        <CopilotMessageContent text={msg.text} />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Thinking loading state bubble */}
+          {isCopilotLoading && (
+            <div className="flex flex-col items-start mr-auto max-w-[85%]">
+              <span className="text-[8px] font-bold text-muted-text uppercase tracking-wider mb-1 select-none">Copilot</span>
+              <div className="flex gap-2 items-center bg-secondary-surface/50 border border-borders/60 rounded-2xl rounded-tl-none px-4 py-3 text-xs text-muted-text shadow-xs">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary-accent" />
+                <span className="font-medium animate-pulse">Analyzing operations dataset...</span>
+              </div>
+            </div>
+          )}
+
+          {/* Copilot Error display */}
+          {copilotError && (
+            <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl flex items-center gap-3 text-left">
+              <AlertCircle className="w-5 h-5 text-danger shrink-0" />
+              <div className="text-xs">
+                <p className="font-bold text-primary-text">{copilotError}</p>
+                <p className="text-muted-text text-[10px] mt-0.5">Please check network connection or API limits.</p>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Suggested Question Chips */}
+        <div className="p-3 border-t border-borders/40 bg-secondary-surface/20 flex flex-col gap-1.5 text-left select-none">
+          <span className="text-[9px] font-bold text-muted-text uppercase tracking-wider">Quick Suggestions</span>
+          <div className="flex gap-2 overflow-x-auto pb-1.5 no-scrollbar scroll-smooth shrink-0">
+            {[
+              "Summarize today's incidents",
+              "Which area needs immediate attention?",
+              "Which department is overloaded?",
+              "What should I prioritize today?",
+              "Show unresolved critical incidents"
+            ].map((chip, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleSendCopilotMessage(chip)}
+                disabled={isCopilotLoading}
+                className="shrink-0 px-3 py-1.5 bg-surface border border-borders rounded-full text-[10px] font-semibold text-secondary-text hover:border-primary-accent hover:text-primary-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none cursor-pointer"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Typing Input Form footer */}
+        <form 
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendCopilotMessage();
+          }}
+          className="p-4 border-t border-borders bg-surface flex gap-2"
+        >
+          <input
+            type="text"
+            value={copilotInput}
+            onChange={(e) => setCopilotInput(e.target.value)}
+            disabled={isCopilotLoading}
+            placeholder="Ask copilot about municipal operations..."
+            className="flex-1 bg-secondary-surface/40 border border-borders text-secondary-text text-xs rounded-xl px-3.5 py-2.5 outline-none hover:border-primary-accent focus:border-primary-accent focus:bg-surface transition-all disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={isCopilotLoading || !copilotInput.trim()}
+            className="p-2.5 bg-primary-accent text-white rounded-xl shadow-sm hover:shadow hover:bg-primary-accent/90 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
       </div>
     </div>
   );
