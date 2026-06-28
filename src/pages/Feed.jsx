@@ -1,53 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import PageHeader from '../components/ui/PageHeader';
-import Badge from '../components/ui/Badge';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import IncidentReportCard from '../components/cards/IncidentReportCard';
 import { MOCK_CATEGORIES } from '../data/mockIncidents';
-import { Grid, Map, Filter, RefreshCw, Info, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { Grid, Map, MapPin, Filter, RefreshCw, Info, AlertTriangle, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getLiveIncidents, toggleVerification } from '../services/firebase/firestoreService';
-
-const parseCoordinates = (locationText, incidentId = '') => {
-  if (!locationText) {
-    return { lat: 37.7749, lng: -122.4194 };
-  }
-
-  const decDirRegex = /(-?\d+\.\d+)\s*[°,°]?\s*([NS])\s*,\s*(-?\d+\.\d+)\s*[°,°]?\s*([EW])/i;
-  const dirMatch = locationText.match(decDirRegex);
-  if (dirMatch) {
-    let lat = parseFloat(dirMatch[1]);
-    let lng = parseFloat(dirMatch[3]);
-    if (dirMatch[2].toUpperCase() === 'S') lat = -lat;
-    if (dirMatch[4].toUpperCase() === 'W') lng = -lng;
-    return { lat, lng };
-  }
-
-  const simpleDecRegex = /(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/;
-  const simpleMatch = locationText.match(simpleDecRegex);
-  if (simpleMatch) {
-    return {
-      lat: parseFloat(simpleMatch[1]),
-      lng: parseFloat(simpleMatch[2])
-    };
-  }
-
-  // Stable coordinates hashing fallback based on incident details
-  let hash = 0;
-  const str = incidentId || locationText;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const stableOffsetLat = Math.abs((hash % 100) / 2500); // 0.0 to 0.04
-  const stableOffsetLng = Math.abs(((hash >> 8) % 100) / 2000); // 0.0 to 0.05
-
-  return {
-    lat: 37.75 + stableOffsetLat,
-    lng: -122.45 + stableOffsetLng
-  };
-};
+import { getLiveIncidents, toggleVerification, updateIncident } from '../services/firebase/firestoreService';
+import IncidentMap from '../components/maps/IncidentMap';
 
 const SkeletonCard = () => (
   <Card className="flex flex-col md:flex-row gap-6 p-0! h-full animate-pulse border-borders/60 select-none">
@@ -71,6 +31,15 @@ const SkeletonCard = () => (
   </Card>
 );
 
+const extractCityFromLocation = (location = '', fallbackCity = 'Unknown') => {
+  const locLower = location.toLowerCase();
+  if (locLower.includes('new delhi') || locLower.includes('delhi')) return 'New Delhi';
+  if (locLower.includes('mumbai') || locLower.includes('bombay')) return 'Mumbai';
+  if (locLower.includes('lucknow')) return 'Lucknow';
+  if (locLower.includes('gorakhpur')) return 'Gorakhpur';
+  return fallbackCity;
+};
+
 export default function Feed() {
   const navigate = useNavigate();
   const [incidents, setIncidents] = useState([]);
@@ -79,9 +48,9 @@ export default function Feed() {
 
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedSeverity, setSelectedSeverity] = useState('all');
+  const [selectedCity, setSelectedCity] = useState('All Cities');
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
   const [verifiedMap, setVerifiedMap] = useState({}); // track local verification clicks
-  const [selectedMapIncident, setSelectedMapIncident] = useState(null);
 
   const unsubscribeRef = useRef(null);
 
@@ -120,6 +89,110 @@ export default function Feed() {
       }
     };
   }, []);
+
+  const geocodingInProgress = useRef(new Set());
+
+  // One-time geocoding recovery for incidents missing latitude/longitude
+  useEffect(() => {
+    if (incidents.length === 0) return;
+
+    const incidentsToGeocode = incidents.filter(incident => {
+      const missingCoords = typeof incident.latitude !== 'number' || typeof incident.longitude !== 'number';
+      const hasAddressInfo = !!(incident.location || incident.city || incident.state || incident.country);
+      const notInProgress = !geocodingInProgress.current.has(incident.id);
+      return missingCoords && hasAddressInfo && notInProgress;
+    });
+
+    if (incidentsToGeocode.length === 0) return;
+
+    const geocodeSequential = async () => {
+      for (const incident of incidentsToGeocode) {
+        geocodingInProgress.current.add(incident.id);
+
+        let city = incident.city || 'Unknown';
+        if (city === 'Unknown' && incident.location) {
+          city = extractCityFromLocation(incident.location, 'Unknown');
+        }
+
+        const queryParts = [];
+        if (incident.location) queryParts.push(incident.location);
+        if (city && city !== 'Unknown') queryParts.push(city);
+        if (incident.state && incident.state !== 'Unknown') queryParts.push(incident.state);
+        if (incident.country && incident.country !== 'Unknown') queryParts.push(incident.country);
+
+        const queryStr = queryParts.join(', ');
+        if (!queryStr.trim()) continue;
+
+        try {
+          // Delay to respect OpenStreetMap Nominatim request guidelines (max 1/sec)
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          let response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(queryStr)}&limit=1`,
+            {
+              headers: {
+                'Accept-Language': 'en-US,en;q=0.9',
+                'User-Agent': 'CivicPulse-AI-Operations'
+              }
+            }
+          );
+
+          let data = [];
+          if (response.ok) {
+            data = await response.json();
+          }
+
+          // Fallback geocoding at city level if specific address resolves to empty
+          if ((!data || data.length === 0) && city !== 'Unknown') {
+            const fallbackQuery = `${city}, ${incident.state || ''}, ${incident.country || 'India'}`;
+            const fallbackResponse = await fetch(
+              `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(fallbackQuery)}&limit=1`,
+              {
+                headers: {
+                  'Accept-Language': 'en-US,en;q=0.9',
+                  'User-Agent': 'CivicPulse-AI-Operations'
+                }
+              }
+            );
+            if (fallbackResponse.ok) {
+              data = await fallbackResponse.json();
+            }
+          }
+
+          if (data && data.length > 0) {
+            const lat = parseFloat(data[0].lat);
+            const lon = parseFloat(data[0].lon);
+
+            if (!isNaN(lat) && !isNaN(lon)) {
+              const addr = data[0].address || {};
+              const resolvedCity = addr.city || addr.town || addr.village || addr.suburb || city;
+              const resolvedState = addr.state || 'Unknown';
+              const resolvedCountry = addr.country || 'Unknown';
+
+              console.log(`Recovered coordinates for incident ${incident.id}: ${lat}, ${lon}, resolved city: ${resolvedCity}`);
+              
+              const fieldsToUpdate = {
+                latitude: lat,
+                longitude: lon,
+                coordinateSource: 'Recovered'
+              };
+
+              // Update Firestore properties if empty/Unknown
+              if (!incident.city || incident.city === 'Unknown') fieldsToUpdate.city = resolvedCity;
+              if (!incident.state || incident.state === 'Unknown') fieldsToUpdate.state = resolvedState;
+              if (!incident.country || incident.country === 'Unknown') fieldsToUpdate.country = resolvedCountry;
+
+              await updateIncident(incident.id, fieldsToUpdate);
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to geocode incident ${incident.id}:`, err);
+        }
+      }
+    };
+
+    geocodeSequential();
+  }, [incidents]);
 
   // Toggle local verification upvote
   const handleVerify = async (id) => {
@@ -176,17 +249,91 @@ export default function Feed() {
     return 'roads';
   };
 
-  // Filter criteria logic
-  const filteredIncidents = incidents.filter(incident => {
-    const dept = incident.authority?.department || '';
-    const issueType = incident.analysis?.issueType || '';
-    const category = getCategoryKey(dept, issueType);
-    const severity = incident.analysis?.severity?.toLowerCase() || 'medium';
+  // Dynamically extract unique cities from Firestore data to build select options
+  const uniqueCities = useMemo(() => {
+    const citiesSet = new Set();
+    incidents.forEach(inc => {
+      let city = inc.city || 'Unknown';
+      if (city === 'Unknown' && inc.location) {
+        city = extractCityFromLocation(inc.location, 'Unknown');
+      }
+      if (city && city !== 'Unknown') {
+        citiesSet.add(city);
+      }
+    });
+    return [...citiesSet].sort();
+  }, [incidents]);
 
-    const matchesCategory = selectedCategory === 'all' || category === selectedCategory;
-    const matchesSeverity = selectedSeverity === 'all' || severity === selectedSeverity;
-    return matchesCategory && matchesSeverity;
-  });
+  // Memoize filtered incidents based on category, severity, and city scope
+  const filteredIncidents = useMemo(() => {
+    return incidents.filter(incident => {
+      const dept = incident.authority?.department || '';
+      const issueType = incident.analysis?.issueType || '';
+      const category = getCategoryKey(dept, issueType);
+      const severity = incident.analysis?.severity?.toLowerCase() || 'medium';
+      
+      let city = incident.city || 'Unknown';
+      if (city === 'Unknown' && incident.location) {
+        city = extractCityFromLocation(incident.location, 'Unknown');
+      }
+
+      const matchesCategory = selectedCategory === 'all' || category === selectedCategory;
+      const matchesSeverity = selectedSeverity === 'all' || severity === selectedSeverity;
+      const matchesCity = selectedCity === 'All Cities' || city.toLowerCase() === selectedCity.toLowerCase();
+
+      return matchesCategory && matchesSeverity && matchesCity;
+    });
+  }, [incidents, selectedCategory, selectedSeverity, selectedCity]);
+
+  // Memoize GIS Analytics Panel metrics calculated directly from state
+  const stats = useMemo(() => {
+    let activeCount = filteredIncidents.length;
+    let criticalCount = 0;
+    let highCount = 0;
+    let mediumCount = 0;
+    let lowCount = 0;
+    let totalPriority = 0;
+    let highestRiskIncident = null;
+
+    filteredIncidents.forEach(inc => {
+      const severity = inc.analysis?.severity?.toLowerCase() || 'medium';
+      if (severity === 'critical') criticalCount++;
+      else if (severity === 'high') highCount++;
+      else if (severity === 'medium') mediumCount++;
+      else if (severity === 'low') lowCount++;
+
+      const score = typeof inc.analysis?.riskScore === 'number'
+        ? inc.analysis.riskScore
+        : parseFloat(inc.analysis?.riskScore) || 5.0;
+      totalPriority += score;
+
+      if (!highestRiskIncident) {
+        highestRiskIncident = inc;
+      } else {
+        const currentHighestScore = typeof highestRiskIncident.analysis?.riskScore === 'number'
+          ? highestRiskIncident.analysis.riskScore
+          : parseFloat(highestRiskIncident.analysis?.riskScore) || 5.0;
+        if (score > currentHighestScore) {
+          highestRiskIncident = inc;
+        }
+      }
+    });
+
+    const averagePriority = activeCount > 0 ? (totalPriority / activeCount) : 0;
+    const highestRiskArea = highestRiskIncident
+      ? (highestRiskIncident.landmark || highestRiskIncident.location || 'N/A')
+      : 'N/A';
+
+    return {
+      activeCount,
+      criticalCount,
+      highCount,
+      mediumCount,
+      lowCount,
+      averagePriority,
+      highestRiskArea
+    };
+  }, [filteredIncidents]);
 
   return (
     <div className="flex flex-col gap-8 text-left">
@@ -246,6 +393,20 @@ export default function Feed() {
 
         {/* Dropdown filters */}
         <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-muted-text" />
+            <select
+              value={selectedCity}
+              onChange={(e) => setSelectedCity(e.target.value)}
+              className="border border-borders rounded-xl bg-surface px-3 py-2 text-xs font-semibold text-secondary-text focus:outline-none focus:border-primary-accent"
+            >
+              <option value="All Cities">All Cities</option>
+              {uniqueCities.map(city => (
+                <option key={city} value={city}>{city}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-muted-text" />
             <select
@@ -313,148 +474,63 @@ export default function Feed() {
           </Card>
         )
       ) : (
-        /* Telemetry Map Mock View */
-        <Card className="p-0 h-[500px] md:h-[600px] relative overflow-hidden flex flex-col justify-end">
-          {/* Vector grid background representing a city map */}
-          <div className="absolute inset-0 bg-[#F1F5F9] bg-[linear-gradient(rgba(226,232,240,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(226,232,240,0.5)_1px,transparent_1px)] bg-[size:32px_32px] overflow-hidden">
-            {/* Styled roads overlay */}
-            <div className="absolute top-1/3 left-0 right-0 h-8 bg-white/70 border-y border-borders/50 rotate-[-4deg] flex items-center justify-center text-[10px] text-muted-text font-semibold uppercase tracking-wider select-none">
-              Broadway Expressway
-            </div>
-            <div className="absolute top-0 bottom-0 left-1/3 w-8 bg-white/70 border-x border-borders/50 rotate-[12deg] flex items-center justify-center text-[10px] text-muted-text font-semibold uppercase tracking-wider select-none write-vertical">
-              Oak Avenue Connector
-            </div>
-            <div className="absolute top-2/3 left-0 right-0 h-6 bg-white/70 border-y border-borders/50 rotate-[2deg]" />
-            <div className="absolute top-0 bottom-0 left-2/3 w-6 bg-white/70 border-x border-borders/50 rotate-[-5deg]" />
-
-            {/* Park Zone */}
-            <div className="absolute top-12 right-12 w-32 h-32 rounded-3xl bg-emerald-500/10 border border-emerald-500/15 flex items-center justify-center">
-              <span className="text-[10px] font-bold text-emerald-800/60 uppercase tracking-widest">Central Park</span>
-            </div>
-
-            {/* Interactive Pins */}
-            {filteredIncidents.map(incident => {
-              // Convert coordinates to mock CSS percentages
-              // San Francisco coordinate mapper for demo consistency
-              const coords = parseCoordinates(incident.location || '', incident.id);
-              const xPercent = ((coords.lng + 122.45) / 0.06) * 100;
-              const yPercent = ((37.80 - coords.lat) / 0.05) * 100;
-
-              const severity = incident.analysis?.severity?.toLowerCase() || 'medium';
-              const isCritical = severity === 'critical' || severity === 'high';
-              const priorityScore = typeof incident.analysis?.riskScore === 'number'
-                ? incident.analysis.riskScore
-                : parseFloat(incident.analysis?.riskScore) || 5.0;
-
-              return (
-                <button
-                  key={incident.id}
-                  onClick={() => setSelectedMapIncident(incident)}
-                  style={{ left: `${Math.max(10, Math.min(xPercent, 90))}%`, top: `${Math.max(10, Math.min(yPercent, 90))}%` }}
-                  className="absolute transform -translate-x-1/2 -translate-y-1/2 group cursor-pointer"
-                >
-                  {/* Pin Circle Ripple */}
-                  <span className={`absolute -inset-2.5 rounded-full animate-ping opacity-45
-                    ${isCritical ? 'bg-danger' : 'bg-warning'}
-                  `} />
-                  
-                  {/* Pin Dot */}
-                  <div className={`w-6 h-6 rounded-full border-2 border-white shadow-md flex items-center justify-center font-display font-black text-[9px] text-white transition-transform group-hover:scale-125
-                    ${isCritical ? 'bg-danger' : 'bg-warning'}
-                  `}>
-                    {priorityScore.toFixed(0)}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Live City GIS Analytics Panel */}
+          <div className="lg:col-span-1 flex flex-col gap-6">
+            <Card className="p-6 border border-borders shadow-xs flex flex-col gap-5 text-left h-full justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-primary-text border-b border-borders/60 pb-3 flex items-center gap-2 select-none">
+                  <Grid className="w-4 h-4 text-primary-accent" />
+                  City Analytics
+                </h3>
+                
+                <div className="flex flex-col gap-4 text-xs mt-4">
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">Current City:</span>
+                    <span className="font-bold text-primary-text">{selectedCity}</span>
                   </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Map Legend */}
-          <div className="absolute top-4 left-4 bg-surface/90 backdrop-blur-xs border border-borders p-3 rounded-xl shadow-xs text-xs flex flex-col gap-1.5 select-none">
-            <h4 className="font-bold text-primary-text mb-0.5">Map Priority Scale</h4>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-danger inline-block border border-white shadow-xs" />
-              <span>High / Critical (Score 8.0+)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-warning inline-block border border-white shadow-xs" />
-              <span>Medium (Score 5.0 - 7.9)</span>
-            </div>
-          </div>
-
-          {/* Incident Detail Drawer/Overlay */}
-          <AnimatePresence>
-            {selectedMapIncident && (
-              <motion.div
-                initial={{ opacity: 0, y: 50 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 50 }}
-                className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 z-10"
-              >
-                <Card className="p-4 shadow-xl border-primary-accent/20 bg-surface/95 backdrop-blur-xs text-left relative flex flex-col gap-3">
-                  <button
-                    onClick={() => setSelectedMapIncident(null)}
-                    className="absolute top-3 right-3 text-muted-text hover:text-primary-text cursor-pointer"
-                  >
-                    ×
-                  </button>
-
-                  <div className="flex items-center gap-2">
-                    <Badge variant={(selectedMapIncident.analysis?.severity?.toLowerCase() === 'critical' || selectedMapIncident.analysis?.severity?.toLowerCase() === 'high') ? 'danger' : 'warning'} size="xs">
-                      {selectedMapIncident.analysis?.severity || 'Medium'}
-                    </Badge>
-                    <span className="text-[10px] text-muted-text font-bold uppercase tracking-wider">
-                      {selectedMapIncident.authority?.department || 'General Operations'}
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">Active Reports:</span>
+                    <span className="font-bold text-primary-text">{stats.activeCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">Critical Severity:</span>
+                    <span className="font-bold text-danger">{stats.criticalCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">High Severity:</span>
+                    <span className="font-bold text-amber-600">{stats.highCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">Medium Severity:</span>
+                    <span className="font-bold text-amber-500">{stats.mediumCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">Low Severity:</span>
+                    <span className="font-bold text-emerald-600">{stats.lowCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-borders/40">
+                    <span className="font-semibold text-secondary-text">Highest Risk Area:</span>
+                    <span className="font-bold text-primary-text truncate max-w-[150px] text-right" title={stats.highestRiskArea}>
+                      {stats.highestRiskArea}
                     </span>
                   </div>
+                </div>
+              </div>
+              <div className="flex justify-between items-center pt-4 border-t border-borders/60 text-xs">
+                <span className="font-semibold text-secondary-text">Average Priority:</span>
+                <span className="font-bold text-primary-accent text-sm">
+                  {stats.averagePriority.toFixed(1)} / 10.0
+                </span>
+              </div>
+            </Card>
+          </div>
 
-                  <h3 className="text-sm font-bold text-primary-text leading-tight pr-4">
-                    {selectedMapIncident.analysis?.issueType || 'Incident Report'}
-                  </h3>
-
-                  <p className="text-xs text-secondary-text line-clamp-2 leading-relaxed">
-                    {selectedMapIncident.summary || 'No summary details provided.'}
-                  </p>
-
-                  <div className="flex justify-between items-center pt-2 border-t border-borders/60 text-xs gap-3">
-                    <span className="text-muted-text truncate flex-1">
-                      {selectedMapIncident.location}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => navigate(`/incident/${selectedMapIncident.id}`)}
-                        className="px-2.5 py-1 text-[10px] rounded-lg font-bold border border-borders hover:border-primary-accent hover:text-primary-accent bg-surface cursor-pointer select-none"
-                      >
-                        Details
-                      </button>
-                      <button
-                        onClick={() => handleVerify(selectedMapIncident.id)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] rounded-lg font-bold border transition-all cursor-pointer
-                          ${verifiedMap[selectedMapIncident.id]
-                            ? 'bg-primary-accent/10 border-primary-accent/20 text-primary-accent'
-                            : 'bg-surface border-borders text-secondary-text hover:border-primary-accent hover:text-primary-accent'
-                          }
-                        `}
-                      >
-                        Verify ({selectedMapIncident.verificationCount || 0})
-                      </button>
-                    </div>
-                  </div>
-
-                  {selectedMapIncident.authority?.department && (
-                    <div className="mt-1 bg-secondary-surface/40 rounded-lg p-2.5 text-[10px] text-secondary-text flex flex-col gap-1 border border-borders/40">
-                      <span className="font-bold text-primary-accent flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3" />
-                        AI Dispatch Route:
-                      </span>
-                      <p className="leading-normal">{selectedMapIncident.authority.department}</p>
-                    </div>
-                  )}
-                </Card>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </Card>
+          {/* Leaflet GIS Map Container */}
+          <div className="lg:col-span-2 h-[500px] md:h-[600px] w-full">
+            <IncidentMap incidents={filteredIncidents} selectedCity={selectedCity} />
+          </div>
+        </div>
       )}
     </div>
   );

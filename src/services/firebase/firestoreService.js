@@ -17,7 +17,9 @@ export const createIncident = async (incidentPayload) => {
     city,
     state,
     country,
-    landmark
+    landmark,
+    latitude,
+    longitude
   } = incidentPayload;
 
   const documentData = {
@@ -33,6 +35,8 @@ export const createIncident = async (incidentPayload) => {
     state: state || 'Unknown',
     country: country || 'Unknown',
     landmark: landmark || '',
+    latitude: latitude !== undefined && latitude !== null ? Number(latitude) : null,
+    longitude: longitude !== undefined && longitude !== null ? Number(longitude) : null,
 
     status: 'Open',
     verificationCount: 0,
@@ -160,6 +164,19 @@ export const toggleVerification = async (id, shouldIncrement) => {
   } catch (error) {
     console.error('Error toggling verification count in Firestore:', error);
     throw new Error('Failed to save verification. Please check network and permissions.');
+  }
+};
+
+/**
+ * Updates arbitrary fields of an incident inside Firestore.
+ */
+export const updateIncident = async (id, fieldsToUpdate) => {
+  try {
+    const docRef = doc(db, 'incidents', id);
+    await updateDoc(docRef, fieldsToUpdate);
+  } catch (error) {
+    console.error('Error updating incident in Firestore:', error);
+    throw new Error('Failed to update incident details: ' + (error.message || 'Network error'));
   }
 };
 

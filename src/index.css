@@ -82,3 +82,40 @@
 .animate-fade-in {
   animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Custom Leaflet popup overrides */
+.leaflet-popup-content-wrapper {
+  background-color: var(--color-surface) !important;
+  color: var(--color-primary-text) !important;
+  border: 1px solid var(--color-borders) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.leaflet-popup-content {
+  margin: 0 !important;
+  width: auto !important;
+}
+
+.leaflet-popup-tip {
+  background-color: var(--color-surface) !important;
+  border: 1px solid var(--color-borders) !important;
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+  color: var(--color-secondary-text) !important;
+  padding: 8px !important;
+  font-size: 16px !important;
+}
+
+.custom-leaflet-marker {
+  background: none !important;
+  border: none !important;
+}
+
+.custom-cluster-icon {
+  background: none !important;
+  border: none !important;
+}

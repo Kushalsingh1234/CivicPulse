@@ -434,10 +434,70 @@ export default function IncidentDetails() {
               </button>
             </div>
 
-            {/* Terminal display */}
-            <pre className="font-mono text-left text-xs bg-slate-900 border border-slate-950 p-4 rounded-xl text-teal-400 overflow-x-auto whitespace-pre leading-relaxed shadow-inner select-text select-none">
-              {getDispatchTemplate(incident)}
-            </pre>
+            {/* Premium visual display of the dispatch brief */}
+            <div className="bg-secondary-surface/30 border border-borders/60 rounded-2xl p-6 flex flex-col gap-6 text-left">
+              {/* Header Telemetry Row */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-borders/50">
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">Telemetry Address</span>
+                  <span className="text-sm font-semibold text-primary-text">{incident.location || 'Not Available'}</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">Urgency & Routing</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md bg-primary-accent/10 text-primary-accent">
+                      {incident.authority?.department || 'Operations Team'}
+                    </span>
+                    <span className="px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md bg-danger/10 text-danger">
+                      {incident.authority?.urgency || 'Routine'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid Content: Incident Details */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pb-6 border-b border-borders/50">
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">Incident Category</span>
+                  <span className="text-xs font-bold text-primary-text">{incident.analysis?.issueType || 'Unclassified Hazard'}</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">Severity Tier</span>
+                  <span className="text-xs font-bold text-primary-text uppercase">{(incident.analysis?.severity || 'Medium')}</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">AI Priority Rating</span>
+                  <span className="text-xs font-bold text-primary-accent">{incident.analysis?.riskScore || '5.0'} / 10.0</span>
+                </div>
+              </div>
+
+              {/* Directives Section */}
+              <div className="flex flex-col gap-4">
+                <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">Operational Directives</span>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 rounded-xl bg-surface border border-borders/85">
+                    <span className="text-[9px] font-bold text-danger uppercase tracking-widest block mb-1">Immediate Plan</span>
+                    <p className="text-xs text-secondary-text leading-relaxed">{incident.resolution?.immediateAction || 'Deploy standard assessment.'}</p>
+                  </div>
+                  <div className="p-4 rounded-xl bg-surface border border-borders/85">
+                    <span className="text-[9px] font-bold text-amber-600 uppercase tracking-widest block mb-1">Short-Term Plan</span>
+                    <p className="text-xs text-secondary-text leading-relaxed">{incident.resolution?.shortTerm || 'Monitor and report updates.'}</p>
+                  </div>
+                  <div className="p-4 rounded-xl bg-surface border border-borders/85">
+                    <span className="text-[9px] font-bold text-primary-accent uppercase tracking-widest block mb-1">Long-Term Plan</span>
+                    <p className="text-xs text-secondary-text leading-relaxed">{incident.resolution?.longTerm || 'Schedule permanent structure repair.'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Summary Description Section */}
+              <div className="flex flex-col gap-1.5 pt-2">
+                <span className="text-[10px] font-bold text-muted-text uppercase tracking-widest">AI Dispatch Summary</span>
+                <p className="text-xs text-secondary-text leading-relaxed bg-surface border border-borders/85 rounded-xl p-4 italic font-medium">
+                  "{incident.summary || 'No further summary data provided.'}"
+                </p>
+              </div>
+            </div>
           </Card>
         </div>
       </div>

@@ -7,7 +7,7 @@ import Input from '../components/ui/Input';
 import Textarea from '../components/ui/Textarea';
 import Badge from '../components/ui/Badge';
 import ProgressStepper from '../components/ui/ProgressStepper';
-import { Upload, MapPin, Sparkles, RefreshCw, CheckCircle, ShieldAlert, FileText, Loader2 } from 'lucide-react';
+import { Upload, MapPin, Sparkles, RefreshCw, CheckCircle, ShieldAlert, FileText, Loader2, Check } from 'lucide-react';
 import { analyzeIncident } from '../services/gemini/visionService';
 import { createIncident } from '../services/firebase/firestoreService';
 // Samples that users can click to pre-fill and run analysis
@@ -16,8 +16,11 @@ const MOCK_SAMPLES = [
     id: 's-1',
     title: 'Exposed Electrical Hazard',
     description: 'A metal electrical cabinet near the school bus stop is open, exposing red and yellow wires to the weather.',
-    address: 'Summit Street & 4th Ave, Heights District',
-    imageUrl: 'https://images.unsplash.com/photo-1558449028-b53a39d100fc?auto=format&fit=crop&w=800&q=80',
+    address: 'Sector 5, Connaught Place, New Delhi, Delhi, 110001',
+    city: 'New Delhi',
+    state: 'Delhi',
+    country: 'India',
+    imageUrl: '/images/exposed_electrical_hazard.png',
     severity: 'critical',
     priorityScore: 9.6,
     aiAnalysis: {
@@ -25,14 +28,17 @@ const MOCK_SAMPLES = [
       severityDetail: 'CRITICAL. Weatherproof seals breached. Main grid distribution lines (120V/240V) fully exposed to public touch.',
       riskDetail: 'EXTREME. Direct risk of contact electrocution. Wet forecast increases immediate failure and grounding hazards.',
       authority: 'Municipal Power Grid - Emergency Maintenance Unit',
-      dispatchTemplate: 'ALERT: Urgent priority hazard identified at Summit St & 4th Ave. Utility Junction #CP-E94 has compromised locks and active exposure. Immediate lock-out crew required.'
+      dispatchTemplate: 'ALERT: Urgent priority hazard identified at Sector 5, Connaught Place. Utility Junction #CP-E94 has compromised locks and active exposure. Immediate lock-out crew required.'
     }
   },
   {
     id: 's-2',
     title: 'Water Main Line Rupture',
     description: 'Significant water pooling and gushing onto the sidewalk near the market. Water pressure in our store is very low.',
-    address: '1105 Pine Boulevard, Westside',
+    address: 'Linking Road, Bandra West, Mumbai, Maharashtra, 400050',
+    city: 'Mumbai',
+    state: 'Maharashtra',
+    country: 'India',
     imageUrl: '/images/street_flooding.png',
     severity: 'high',
     priorityScore: 8.5,
@@ -41,14 +47,17 @@ const MOCK_SAMPLES = [
       severityDetail: 'HIGH. Potable water line breach. Flow rate estimated at 120-150 L/min. Active erosion of brick sidewalk substrate.',
       riskDetail: 'MODERATE-HIGH. Safety hazards from standing water on active roadway and undermining of sidewalk structural integrity.',
       authority: 'Municipal Water Authority - Main Line Repairs',
-      dispatchTemplate: 'DISPATCH WORK ORDER: Pine Boulevard Main Line Leak. Sidewalk structural washouts suspected. Shutoff valves must be located and closed immediately to prevent sidewalk collapse.'
+      dispatchTemplate: 'DISPATCH WORK ORDER: Linking Road Main Line Leak. Sidewalk structural washouts suspected. Shutoff valves must be located and closed immediately to prevent sidewalk collapse.'
     }
   },
   {
     id: 's-3',
     title: 'Deep Road Subsidence / Sinkhole',
     description: 'A deep pothole has opened up in the lane, exposing steel rebar underneath. Cars are dodging it.',
-    address: '742 Oak Avenue, Midtown',
+    address: 'Hazratganj Main Market, Lucknow, Uttar Pradesh, 226001',
+    city: 'Lucknow',
+    state: 'Uttar Pradesh',
+    country: 'India',
     imageUrl: '/images/road_pothole.png',
     severity: 'critical',
     priorityScore: 9.2,
@@ -57,7 +66,7 @@ const MOCK_SAMPLES = [
       severityDetail: 'CRITICAL. Depth exceeding 25cm. Severe sub-base roadway erosion. Exposed rebar indicates structural integrity loss.',
       riskDetail: 'HIGH. Vehicle axle/wheel damage. High speed swerving maneuvers in a two-lane arterial road causing collision risk.',
       authority: 'Department of Public Works - Road Operations',
-      dispatchTemplate: 'URGENT DISPATCH: Roadway subsidence and rebar exposure on Oak Avenue. Place warning cones and barriers immediately to close lane. Emergency repaving scheduled for tonight.'
+      dispatchTemplate: 'URGENT DISPATCH: Roadway subsidence and rebar exposure on Hazratganj Main Market. Place warning cones and barriers immediately to close lane. Emergency repaving scheduled for tonight.'
     }
   }
 ];
@@ -69,6 +78,12 @@ export default function Analyzer() {
   const [locationText, setLocationText] = useState('');
   const [description, setDescription] = useState('');
   const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [latitude, setLatitude] = useState(null);
+  const [longitude, setLongitude] = useState(null);
+  const [detectedCity, setDetectedCity] = useState('Unknown');
+  const [detectedState, setDetectedState] = useState('Unknown');
+  const [detectedCountry, setDetectedCountry] = useState('Unknown');
+  const [isLocationDetected, setIsLocationDetected] = useState(false);
 
   // AI Pipeline Stepper State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -78,6 +93,7 @@ export default function Analyzer() {
   // API Call state
   const [apiData, setApiData] = useState(null);
   const [apiError, setApiError] = useState(null);
+  const [isAnalysisError, setIsAnalysisError] = useState(false);
   const [firestoreDocId, setFirestoreDocId] = useState(null);
 
   const steps = [
@@ -95,19 +111,109 @@ export default function Analyzer() {
     setLocationText(sample.address);
     setDescription(sample.description);
     setApiError(null);
+    setIsAnalysisError(false);
     setFirestoreDocId(null);
+    setLatitude(null);
+    setLongitude(null);
+    setDetectedCity(sample.city || 'Unknown');
+    setDetectedState(sample.state || 'Unknown');
+    setDetectedCountry(sample.country || 'Unknown');
+    setIsLocationDetected(true);
   };
 
-  // Detect location mock
+  const handleLocationChange = (e) => {
+    setLocationText(e.target.value);
+    setApiError(null);
+    setIsAnalysisError(false);
+    setLatitude(null);
+    setLongitude(null);
+    setDetectedCity('Unknown');
+    setDetectedState('Unknown');
+    setDetectedCountry('Unknown');
+    setIsLocationDetected(false);
+  };
+
+  // Detect location via Browser Geolocation API and reverse geocode with OpenStreetMap Nominatim
   const handleDetectLocation = () => {
+    if (!navigator.geolocation) {
+      setApiError('Geolocation is not supported by your browser.');
+      return;
+    }
+
     setIsDetectingLocation(true);
-    setTimeout(() => {
-      setIsDetectingLocation(false);
-      setLocationText('742 Oak Avenue, Midtown (37.7749° N, 122.4194° W)');
-    }, 1200);
+    setApiError(null);
+    setIsAnalysisError(false);
+    setIsLocationDetected(false);
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude: lat, longitude: lon } = position.coords;
+        setLatitude(lat);
+        setLongitude(lon);
+
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`,
+            {
+              headers: {
+                'Accept-Language': 'en-US,en;q=0.9',
+                'User-Agent': 'CivicPulse-AI-Operations'
+              }
+            }
+          );
+
+          if (!response.ok) {
+            throw new Error('Failed to resolve coordinates to address.');
+          }
+
+          const data = await response.json();
+          const address = data.display_name || `${lat.toFixed(6)}° N, ${lon.toFixed(6)}° W`;
+          setLocationText(address);
+
+          // Extract structured address details
+          const addr = data.address || {};
+          const cityVal = addr.city || addr.town || addr.village || addr.suburb || 'Unknown';
+          const stateVal = addr.state || 'Unknown';
+          const countryVal = addr.country || 'Unknown';
+
+          setDetectedCity(cityVal);
+          setDetectedState(stateVal);
+          setDetectedCountry(countryVal);
+          setIsLocationDetected(true);
+        } catch (err) {
+          console.error('Error reverse geocoding coordinates:', err);
+          // Fallback to plain coordinates text representation
+          setLocationText(`${lat.toFixed(6)}° N, ${lon.toFixed(6)}° W`);
+          setIsLocationDetected(true);
+        } finally {
+          setIsDetectingLocation(false);
+        }
+      },
+      (error) => {
+        setIsDetectingLocation(false);
+        let msg = 'An unexpected error occurred while retrieving location.';
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            msg = 'Location access was denied. Please check your browser\'s location permissions.';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            msg = 'Location information is unavailable on this device.';
+            break;
+          case error.TIMEOUT:
+            msg = 'Request to retrieve device location timed out.';
+            break;
+        }
+        setApiError(msg);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
   };
 
-  // Drag and drop / file upload mock
+  // Drag and drop / file upload callback
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -116,7 +222,14 @@ export default function Analyzer() {
       setImageUrl(URL.createObjectURL(file));
       setSelectedSample(null);
       setApiError(null);
+      setIsAnalysisError(false);
       setFirestoreDocId(null);
+      setLatitude(null);
+      setLongitude(null);
+      setDetectedCity('Unknown');
+      setDetectedState('Unknown');
+      setDetectedCountry('Unknown');
+      setIsLocationDetected(false);
     }
   };
 
@@ -129,6 +242,7 @@ export default function Analyzer() {
     setAnalysisResult(null);
     setApiData(null);
     setApiError(null);
+    setIsAnalysisError(false);
     setFirestoreDocId(null);
 
     try {
@@ -147,10 +261,12 @@ export default function Analyzer() {
         summary: result.summary,
         location: locationText,
         description: description,
-        city: result.locationAnalysis?.city || 'Unknown',
-        state: result.locationAnalysis?.state || 'Unknown',
-        country: result.locationAnalysis?.country || 'Unknown',
-        landmark: result.locationAnalysis?.landmark || ''
+        city: detectedCity !== 'Unknown' ? detectedCity : (result.locationAnalysis?.city || 'Unknown'),
+        state: detectedState !== 'Unknown' ? detectedState : (result.locationAnalysis?.state || 'Unknown'),
+        country: detectedCountry !== 'Unknown' ? detectedCountry : (result.locationAnalysis?.country || 'Unknown'),
+        landmark: result.locationAnalysis?.landmark || '',
+        latitude,
+        longitude
       });
 
       setFirestoreDocId(docId);
@@ -158,6 +274,7 @@ export default function Analyzer() {
     } catch (err) {
       console.error(err);
       setApiError(err.message || 'An unexpected error occurred during analysis.');
+      setIsAnalysisError(true);
       setIsAnalyzing(false);
     }
   };
@@ -197,7 +314,12 @@ export default function Analyzer() {
     setIsAnalyzing(false);
     setApiData(null);
     setApiError(null);
-    setFirestoreDocId(null);
+    setLatitude(null);
+    setLongitude(null);
+    setDetectedCity('Unknown');
+    setDetectedState('Unknown');
+    setDetectedCountry('Unknown');
+    setIsLocationDetected(false);
   };
 
   const category = analysisResult?.authority?.department || 'General Operations';
@@ -212,9 +334,7 @@ export default function Analyzer() {
   const riskDetail = analysisResult?.analysis?.environmentalRisk || 'No environmental risks assessed.';
   const authority = analysisResult?.authority?.department || 'Operations Team';
   
-  const confidence = analysisResult?.analysis?.confidence || 1.0;
-  const locationConfidence = analysisResult?.locationAnalysis?.locationConfidence || 1.0;
-  const isLowConfidence = confidence < 0.75 || locationConfidence < 0.75;
+
 
   return (
     <div className="flex flex-col gap-8 md:gap-10 text-left">
@@ -245,17 +365,23 @@ export default function Analyzer() {
                     <div className="flex items-start gap-2.5 min-w-0">
                       <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" />
                       <div className="min-w-0 flex-1 break-words">
-                        <p className="font-bold text-danger">Analysis Failed</p>
-                        <p className="text-xs text-danger/90 mt-1 break-all whitespace-pre-wrap">{apiError}</p>
+                        <p className="font-bold text-danger">
+                          {isAnalysisError ? 'Analysis Failed' : 'Location Detection Failed'}
+                        </p>
+                        <p className="text-xs text-danger/90 mt-1 break-all whitespace-pre-wrap">
+                          {isAnalysisError ? 'Servers are experiencing heavy traffic' : apiError}
+                        </p>
                       </div>
                     </div>
                     <div className="flex gap-2 justify-end">
                       <Button variant="secondary" size="sm" onClick={() => setApiError(null)} className="px-3.5 py-1.5 h-auto text-xs font-semibold">
                         Dismiss
                       </Button>
-                      <Button variant="danger" size="sm" onClick={handleAnalyze} className="px-3.5 py-1.5 h-auto text-xs font-semibold">
-                        Retry Analysis
-                      </Button>
+                      {isAnalysisError && (
+                        <Button variant="danger" size="sm" onClick={handleAnalyze} className="px-3.5 py-1.5 h-auto text-xs font-semibold">
+                          Retry Analysis
+                        </Button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -297,26 +423,36 @@ export default function Analyzer() {
                 </div>
 
                 {/* Geolocation Input */}
-                <div className="flex flex-col md:flex-row gap-4 items-end">
-                  <Input
-                    label="Incident Location *"
-                    placeholder="Enter street address or coordinates"
-                    value={locationText}
-                    onChange={(e) => setLocationText(e.target.value)}
-                    icon={MapPin}
-                    className="flex-1"
-                  />
-                  <Button
-                    variant="secondary"
-                    onClick={handleDetectLocation}
-                    disabled={isDetectingLocation}
-                    className="shrink-0 w-full md:w-auto h-[46px]"
-                    icon={isDetectingLocation ? Loader2 : MapPin}
-                    iconPosition="left"
-                    isLoading={isDetectingLocation}
-                  >
-                    {isDetectingLocation ? 'Locating...' : 'Detect GPS'}
-                  </Button>
+                <div className="flex flex-col gap-1.5 w-full">
+                  <div className="flex flex-col md:flex-row gap-4 items-end w-full">
+                    <Input
+                      label="Incident Location *"
+                      placeholder="Enter street address or coordinates"
+                      value={locationText}
+                      onChange={handleLocationChange}
+                      icon={MapPin}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="secondary"
+                      onClick={handleDetectLocation}
+                      disabled={isDetectingLocation}
+                      className={`shrink-0 w-full md:w-auto h-[46px] transition-colors ${
+                        isLocationDetected ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600' : ''
+                      }`}
+                      icon={isDetectingLocation ? Loader2 : (isLocationDetected ? Check : MapPin)}
+                      iconPosition="left"
+                      isLoading={isDetectingLocation}
+                    >
+                      {isDetectingLocation ? 'Locating...' : (isLocationDetected ? 'GPS Active' : 'Detect GPS')}
+                    </Button>
+                  </div>
+                  {isLocationDetected && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-600 font-semibold select-none mt-0.5">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>GPS location successfully detected & reverse geocoded</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Optional short description */}
@@ -464,26 +600,15 @@ export default function Analyzer() {
                   <div className="p-4 rounded-xl bg-success/8 text-emerald-800 border border-success/20 text-xs flex items-start gap-3 select-none -mt-4 mb-2 animate-pulse min-w-0">
                     <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                     <div className="min-w-0 flex-1 break-words">
-                      <p className="font-bold text-emerald-700">Incident Persisted to Operations Queue</p>
+                      <p className="font-bold text-emerald-700">Incident successfully persisted to operations queue</p>
                       <p className="text-emerald-600/90 mt-1 break-all whitespace-pre-wrap">
-                        The hazard report has been successfully recorded in Cloud Firestore. Reference Document ID: <code className="bg-emerald-500/10 px-1 py-0.5 rounded font-mono text-[10px] select-all cursor-pointer font-bold" title="Click to select">{firestoreDocId}</code>.
+                        The complaint has been reported to the operations centre.
                       </p>
                     </div>
                   </div>
                 )}
 
-                {isLowConfidence && (
-                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-800 text-xs flex items-start gap-3 select-none -mt-4 mb-2 min-w-0">
-                    <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="min-w-0 flex-1 break-words">
-                      <p className="font-bold text-amber-700">Verification Recommended (Low Confidence Analysis)</p>
-                      <p className="text-amber-600/90 mt-1 break-all whitespace-pre-wrap">
-                        The AI models returned a confidence level of {(confidence * 100).toFixed(0)}% (location match: {(locationConfidence * 100).toFixed(0)}%). 
-                        Please review and confirm routing details manually before submitting to the Operations Queue.
-                      </p>
-                    </div>
-                  </div>
-                )}
+
 
                 {/* Analysis Points */}
                 <div className="grid grid-cols-1 gap-6">
