@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import PageHeader from '../components/ui/PageHeader';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -16,8 +16,8 @@ import {
   Sparkles,
   MapPin
 } from 'lucide-react';
-import { getLiveIncidents, updateIncidentStatus } from '../services/firebase/firestoreService';
-import { generateCityIntelligence } from '../services/gemini/cityIntelligenceService';
+import { getLiveIncidents, updateIncidentStatus, getFirestoreCachedIntelligence, setFirestoreCachedIntelligence } from '../services/firebase/firestoreService';
+import { generateCityIntelligence, generateDatasetFingerprint, getInMemoryCachedIntelligence, cacheIntelligenceInMemory } from '../services/gemini/cityIntelligenceService';
 
 const SkeletonMetrics = () => (
   <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
@@ -63,10 +63,33 @@ const parseWorkloadVal = (workloadText) => {
 
 const getShortWorkload = (workloadText) => {
   if (!workloadText) return 'Routine';
+  const cleaned = String(workloadText).toLowerCase();
+  
+  // Check for percentage formats first
+  const percentMatch = cleaned.match(/\d+%/);
+  if (percentMatch) {
+    let label = 'Active';
+    if (cleaned.includes('critical')) label = 'Critical';
+    else if (cleaned.includes('high') || cleaned.includes('heavy')) label = 'Heavy';
+    else if (cleaned.includes('moderate') || cleaned.includes('medium')) label = 'Moderate';
+    else if (cleaned.includes('routine') || cleaned.includes('low')) label = 'Low';
+    return `${percentMatch[0]} - ${label}`;
+  }
+
+  // Map keywords to uniform status levels
+  if (cleaned.includes('critical')) return 'Critical Load';
+  if (cleaned.includes('high') || cleaned.includes('heavy') || cleaned.includes('severe')) return 'Heavy Load';
+  if (cleaned.includes('moderate') || cleaned.includes('medium') || cleaned.includes('normal')) return 'Moderate Load';
+  if (cleaned.includes('routine') || cleaned.includes('low') || cleaned.includes('minimal')) return 'Low Load';
+  
+  // Fallback to splitting by common separators or first two words
   const parts = workloadText.split(/[-:,(]/);
-  const short = parts[0].trim();
-  // Capitalize the first letter of each word for clean presentation
-  return short.charAt(0).toUpperCase() + short.slice(1);
+  const fallback = parts[0].trim();
+  const words = fallback.split(/\s+/);
+  if (words.length > 2) {
+    return words.slice(0, 2).join(' ');
+  }
+  return fallback.charAt(0).toUpperCase() + fallback.slice(1);
 };
 
 export default function Operations() {
@@ -80,7 +103,30 @@ export default function Operations() {
   const [intelData, setIntelData] = useState(null);
   const [isIntelLoading, setIsIntelLoading] = useState(true);
   const [isIntelError, setIsIntelError] = useState(false);
-  const prevIncidentsKeyRef = useRef('');
+  const [intelMetadata, setIntelMetadata] = useState(null);
+  const [timeTick, setTimeTick] = useState(0);
+
+  // Auto-refresh cache relative age indicators every 15 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeTick(t => t + 1);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const intelStatusLabel = useMemo(() => {
+    if (timeTick === -1) return ''; // reference timeTick to satisfy eslint exhaustive-deps
+    if (!intelMetadata || isIntelLoading) return '';
+    if (intelMetadata.source === 'fresh') {
+      return 'Updated just now';
+    }
+    const elapsedMs = Date.now() - intelMetadata.timestamp;
+    const elapsedMins = Math.floor(elapsedMs / 60000);
+    if (elapsedMins === 0) {
+      return 'Cached Intelligence';
+    }
+    return `Generated ${elapsedMins} minute${elapsedMins === 1 ? '' : 's'} ago`;
+  }, [intelMetadata, isIntelLoading, timeTick]);
 
   // Derived filteredIncidents
   const filteredIncidents = useMemo(() => {
@@ -95,22 +141,48 @@ export default function Operations() {
       setIntelData(null);
       setIsIntelLoading(false);
       setIsIntelError(false);
+      setIntelMetadata(null);
       return;
     }
 
-    // Key combining selected city, count of incidents, and statuses of all incidents
-    const statusHash = incList.map(i => `${i.id}-${i.status}`).join('|');
-    const key = `${cityName}-${incList.length}-${statusHash}`;
-    if (key === prevIncidentsKeyRef.current) {
+    // 1. Check in-memory cache first (Zero loader delay, instantaneous reuse)
+    const memCache = getInMemoryCachedIntelligence(cityName, incList);
+    if (memCache) {
+      setIntelData(memCache.data);
+      setIntelMetadata({ source: 'cache', timestamp: memCache.timestamp });
+      setIsIntelLoading(false);
+      setIsIntelError(false);
       return;
     }
-    prevIncidentsKeyRef.current = key;
 
+    // Cache miss or different fingerprint: activate loading state
     setIsIntelLoading(true);
     setIsIntelError(false);
     try {
+      const fingerprint = generateDatasetFingerprint(incList);
+
+      // 2. Check Firestore persistent cache second
+      const fsCache = await getFirestoreCachedIntelligence(cityName);
+      if (fsCache && fsCache.fingerprint === fingerprint) {
+        // Save to in-memory cache for fast session navigation
+        cacheIntelligenceInMemory(cityName, fsCache.data, fingerprint, fsCache.timestamp);
+
+        setIntelData(fsCache.data);
+        setIntelMetadata({ source: 'cache', timestamp: fsCache.timestamp });
+        return;
+      }
+
+      // 3. Request Gemini third
       const result = await generateCityIntelligence(cityName, incList);
+
+      // Save to Firestore persistent collection
+      await setFirestoreCachedIntelligence(cityName, result, fingerprint);
+
+      // Save to in-memory cache
+      cacheIntelligenceInMemory(cityName, result, fingerprint, Date.now());
+
       setIntelData(result);
+      setIntelMetadata({ source: 'fresh', timestamp: Date.now() });
     } catch (err) {
       console.error('API Error in intelligence fetch:', err);
       setIsIntelError(true);
@@ -439,15 +511,22 @@ export default function Operations() {
 
           {/* AI City Intelligence Section */}
           <Card className="p-6 md:p-8 border border-borders shadow-xs flex flex-col gap-6">
-            <div className="flex items-center justify-between border-b border-borders pb-4">
-              <h2 className="text-sm font-bold text-primary-text flex items-center gap-2 uppercase tracking-wider select-none">
-                <Sparkles className="w-5 h-5 text-secondary-accent animate-pulse" />
-                AI City Intelligence Desk
-              </h2>
-              {isIntelLoading && (
-                <span className="text-xs text-muted-text flex items-center gap-1 font-medium select-none">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Generating insights...
+            <div className="flex flex-col border-b border-borders pb-4 gap-1">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold text-primary-text flex items-center gap-2 uppercase tracking-wider select-none">
+                  <Sparkles className="w-5 h-5 text-secondary-accent animate-pulse" />
+                  AI City Intelligence Desk
+                </h2>
+                {isIntelLoading && (
+                  <span className="text-xs text-muted-text flex items-center gap-1 font-medium select-none">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Generating insights...
+                  </span>
+                )}
+              </div>
+              {intelStatusLabel && (
+                <span className="text-[10px] text-muted-text font-medium select-none pl-7 text-left mt-0.5">
+                  {intelStatusLabel}
                 </span>
               )}
             </div>
@@ -584,7 +663,7 @@ export default function Operations() {
                     {intelData.departmentWorkload?.map((work, i) => {
                       const percentage = parseWorkloadVal(work.workload);
                       return (
-                        <Card key={i} className="p-4 border border-borders/60 bg-secondary-surface/10 flex flex-col gap-3.5 shadow-xs min-w-0">
+                        <Card key={i} className="p-4 border border-borders/60 bg-secondary-surface/10 flex flex-col gap-2.5 shadow-xs min-w-0">
                           <div className="flex flex-col gap-0.5 min-w-0">
                             <span className="font-bold text-primary-text text-xs tracking-tight leading-tight block break-words">
                               {work.department}
@@ -593,14 +672,14 @@ export default function Operations() {
                               Department
                             </span>
                           </div>
-                          <div className="flex flex-col gap-1 mt-auto min-w-0">
+                          <div className="flex flex-col gap-1 min-w-0">
                             <div className="flex flex-col gap-0.5 text-left">
                               <span className="text-muted-text uppercase select-none text-[8px] font-bold tracking-wider">Status</span>
                               <span className={`font-bold block break-words text-xs leading-none ${percentage > 70 ? 'text-danger' : 'text-primary-accent'}`}>
                                 {getShortWorkload(work.workload)}
                               </span>
                             </div>
-                            <div className="h-1.5 w-full bg-borders rounded-full overflow-hidden mt-1.5">
+                            <div className="h-1.5 w-full bg-borders rounded-full overflow-hidden mt-1">
                               <div 
                                 className={`h-full rounded-full transition-all duration-500 ${percentage > 70 ? 'bg-danger' : percentage > 45 ? 'bg-amber-500' : 'bg-primary-accent'}`} 
                                 style={{ width: `${percentage}%` }} 

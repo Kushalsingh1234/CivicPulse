@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
-import { Cpu, Rss, ArrowRight, Shield, Award, Zap, Clock, Users, ArrowUpRight } from 'lucide-react';
+import { Cpu, Rss, ArrowRight, Shield, Zap, Clock, Users, ArrowUpRight } from 'lucide-react';
 import { MOCK_INCIDENTS } from '../data/mockIncidents';
 
 export default function Landing() {

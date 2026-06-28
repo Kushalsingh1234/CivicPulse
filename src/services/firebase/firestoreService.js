@@ -1,4 +1,4 @@
-import { collection, addDoc, serverTimestamp, doc, getDoc, getDocs, updateDoc, query, orderBy, onSnapshot, increment } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, getDoc, getDocs, updateDoc, setDoc, query, orderBy, onSnapshot, increment } from 'firebase/firestore';
 import { db } from './firebase';
 
 /**
@@ -162,3 +162,37 @@ export const toggleVerification = async (id, shouldIncrement) => {
     throw new Error('Failed to save verification. Please check network and permissions.');
   }
 };
+
+/**
+ * Retrieves cached city intelligence document from 'cityIntelligence' collection.
+ */
+export const getFirestoreCachedIntelligence = async (cityName) => {
+  try {
+    const docRef = doc(db, 'cityIntelligence', cityName);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data();
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error reading cached city intelligence for ${cityName}:`, error);
+    return null;
+  }
+};
+
+/**
+ * Persists city intelligence document in 'cityIntelligence' collection.
+ */
+export const setFirestoreCachedIntelligence = async (cityName, data, fingerprint) => {
+  try {
+    const docRef = doc(db, 'cityIntelligence', cityName);
+    await setDoc(docRef, {
+      data,
+      fingerprint,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`Error saving cached city intelligence for ${cityName}:`, error);
+  }
+};
+
