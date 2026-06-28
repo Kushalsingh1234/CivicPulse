@@ -497,10 +497,10 @@ export default function Operations() {
 
                 {/* Executive Operations Brief */}
                 <div className="flex flex-col gap-2 text-left">
-                  <span className="font-bold text-primary-text uppercase tracking-wider text-[10px] text-muted-text flex items-center gap-1.5 select-none">
+                  <span className="font-bold text-primary-text uppercase tracking-wider text-xs text-muted-text flex items-center gap-1.5 select-none">
                     Executive Operations Brief
                   </span>
-                  <p className="text-xs leading-relaxed text-secondary-text bg-primary-accent/5 border border-primary-accent/10 rounded-xl p-4 font-medium italic">
+                  <p className="text-xs leading-relaxed text-secondary-text bg-primary-accent/5 border border-primary-accent/10 rounded-xl p-4 font-medium">
                     "{intelData.executiveBrief}"
                   </p>
                 </div>
@@ -509,7 +509,7 @@ export default function Operations() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Recommendations */}
                   <div className="flex flex-col gap-3 text-left">
-                    <span className="font-bold text-primary-text uppercase tracking-wider text-[10px] text-muted-text select-none border-b border-borders/60 pb-1.5">
+                    <span className="font-bold text-primary-text uppercase tracking-wider text-xs text-muted-text select-none border-b border-borders/60 pb-1.5">
                       Strategic Action Directives
                     </span>
                     <ul className="flex flex-col gap-2 list-disc pl-4 leading-relaxed">
@@ -521,10 +521,10 @@ export default function Operations() {
 
                   {/* Forecast */}
                   <div className="flex flex-col gap-3 text-left">
-                    <span className="font-bold text-primary-text uppercase tracking-wider text-[10px] text-muted-text select-none border-b border-borders/60 pb-1.5">
+                    <span className="font-bold text-primary-text uppercase tracking-wider text-xs text-muted-text select-none border-b border-borders/60 pb-1.5">
                       One-Week Risk Forecast
                     </span>
-                    <p className="text-xs leading-relaxed text-secondary-text p-4 bg-secondary-surface/40 rounded-xl border border-borders/40">
+                    <p className="text-sm leading-relaxed text-secondary-text p-4 bg-secondary-surface/40 rounded-xl border border-borders/40">
                       {intelData.oneWeekForecast}
                     </p>
                   </div>
@@ -534,7 +534,7 @@ export default function Operations() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-t border-borders/60 pt-6">
                   {/* Trending Issues */}
                   <div className="flex flex-col gap-3.5 text-left">
-                    <span className="font-bold text-primary-text uppercase tracking-wider text-[10px] text-muted-text select-none border-b border-borders/60 pb-1.5">
+                    <span className="font-bold text-primary-text uppercase tracking-wider text-xs text-muted-text select-none border-b border-borders/60 pb-1.5">
                       Trending Civic Issues
                     </span>
                     <div className="flex flex-col gap-2">
@@ -549,15 +549,15 @@ export default function Operations() {
 
                   {/* Hotspots */}
                   <div className="flex flex-col gap-3.5 text-left">
-                    <span className="font-bold text-primary-text uppercase tracking-wider text-[10px] text-muted-text select-none border-b border-borders/60 pb-1.5">
+                    <span className="font-bold text-primary-text uppercase tracking-wider text-xs text-muted-text select-none border-b border-borders/60 pb-1.5">
                       Identified Hazard Hotspots
                     </span>
                     <div className="flex flex-col gap-2">
                       {intelData.hotspots && intelData.hotspots.length > 0 ? (
                         intelData.hotspots.map((hotspot, i) => (
                           <div key={i} className="flex flex-col gap-1.5 p-3 bg-secondary-surface/20 border border-borders/40 rounded-lg">
-                            <div className="flex justify-between items-center text-[10px]">
-                              <span className="font-bold text-primary-text truncate max-w-[150px]">{hotspot.location}</span>
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-primary-text truncate max-w-[200px]">{hotspot.location}</span>
                               <Badge variant={
                                 hotspot.risk?.toLowerCase() === 'high' || hotspot.risk?.toLowerCase() === 'critical' ? 'danger' :
                                 hotspot.risk?.toLowerCase() === 'moderate' || hotspot.risk?.toLowerCase() === 'medium' ? 'warning' : 'neutral'
@@ -565,7 +565,7 @@ export default function Operations() {
                                 {hotspot.risk || 'Medium'}
                               </Badge>
                             </div>
-                            <span className="text-[10px] text-secondary-text mt-0.5">{hotspot.reason}</span>
+                            <span className="text-xs text-secondary-text mt-0.5 block break-words leading-normal">{hotspot.reason}</span>
                           </div>
                         ))
                       ) : (
@@ -577,7 +577,7 @@ export default function Operations() {
 
                 {/* Department Workload Card inside AI intelligence section */}
                 <div className="flex flex-col gap-3.5 text-left border-t border-borders/60 pt-6">
-                  <span className="font-bold text-primary-text uppercase tracking-wider text-[10px] text-muted-text select-none border-b border-borders/60 pb-1.5">
+                  <span className="font-bold text-primary-text uppercase tracking-wider text-xs text-muted-text select-none border-b border-borders/60 pb-1.5">
                     Strategic Department Workloads
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
