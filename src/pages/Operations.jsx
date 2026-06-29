@@ -510,7 +510,7 @@ export default function Operations() {
       const name = item?.department ? String(item.department).toLowerCase() : '';
       return name.includes(deptName.toLowerCase());
     });
-    return match ? Number(match.percentage) || 0 : 0;
+    return match ? parseWorkloadVal(match.workload) : 0;
   };
 
   const dpwLoad = getDeptPercentage('Works') || getDeptPercentage('road') || 0;
