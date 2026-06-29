@@ -36,6 +36,14 @@ CivicPulse AI is a next-generation, AI-prioritized smart city operations platfor
 - **Privacy-Safe Referencing**: Employs deterministic Case Numbers (e.g., `CP-082341`) to mask raw Firestore document IDs. References incidents primarily by location/type, reserving case numbers for clarifications.
 - **Suggested Action Chips**: Immediate clicks to fetch workload summaries, safety hotspots, and key prioritization guidelines.
 
+### 6. Interactive GIS Telemetry Map & Command Deck
+- **Leaflet & OSM Tile Rendering**: Integrates a real interactive Leaflet GIS map with OpenStreetMap tiles.
+- **Marker Clustering**: Automatically groups nearby incidents into clusters. Clusters are color-coded based on the highest severity inside the group (Critical -> Red, High -> Orange, Medium -> Yellow, Low -> Green). Clicking on a cluster zooms into the affected area.
+- **Density Heatmap Overlay**: Generates point intensities using incident density, priority score, and severity, creating a visual hot-spot heatmap that can be toggled on/off.
+- **Interactive Layer Toggles**: Floating glassmorphic command panel enables toggling clustering, density heatmaps, and individual categories (Roads, Utilities, Lighting, Sanitation, Safety) on/off, filtering visible map points instantly.
+- **Dynamic India Bound Restriction**: Confines map viewport limits (zoom range `minZoom={4}` and boundaries bounding box) to lock the default view on India's borders, preventing panning outside the country.
+- **Detailed Popup Overlays**: Clicking on any incident marker shows details: thumbnail image, category status, reported time, department assignment, verification count, priority score, severity badge, and an "Open Incident" action routing directly to the details page.
+
 ---
 
 ## 🛠️ Technical Stack & Architecture
@@ -75,6 +83,14 @@ If you are a citizen seeking to report a local civic hazard or verify an active 
 - Browse the live community feed to inspect reports from other users.
 - To verify a report, click the **"Upvote / Verify"** button on the card. This updates the report counter in real-time, incrementing the verification count and priority score in the Operations queue.
 - Click **"View Details"** to navigate to the standalone routing page showing predictive forecasts, emergency responder briefs, and live action checklists.
+
+### Step 6: Use the Interactive GIS Telemetry Map
+- Click the **"Telemetry Map"** tab at the top of the Community Feed to switch from list view to full GIS mode.
+- Click the floating **"Open Control Deck"** button on the top-right of the map to slide open controls.
+- Check off category toggles (Roads, Utilities, Lighting, Sanitation, Safety) to filter pins shown on-screen.
+- Enable **"Density Heatmap"** or **"Incident Clustering"** to visualize geographical incident hotspots and aggregations.
+- Click on any marker node to inspect details inside the custom glassmorphic popup, and click **"Open Incident"** to view its details.
+- To reset zoom bounds back to viewing all India incidents, click the **"Reset Viewport"** button.
 
 ---
 
